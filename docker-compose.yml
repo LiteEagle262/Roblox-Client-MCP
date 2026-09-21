@@ -1,0 +1,41 @@
+services:
+  roblox-client-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: roblox-client-mcp:latest
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-3000}:3000"
+    environment:
+      # The public origin users will hit. This is baked into every loadstring,
+      # so it must be exactly what browsers see -- no trailing slash.
+      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL in .env, e.g. https://roblox-mcp.example.com}
+      DATABASE_PATH: /data/bridge.db
+      TRUST_PROXY: "true"
+
+      ACCOUNT_CREATION_ENABLED: ${ACCOUNT_CREATION_ENABLED:-true}
+      MAX_ACCOUNTS: ${MAX_ACCOUNTS:-0}
+      SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-30}
+
+      RATE_LIMIT_ACCOUNT_PER_HOUR: ${RATE_LIMIT_ACCOUNT_PER_HOUR:-3}
+      RATE_LIMIT_ACCOUNT_PER_DAY: ${RATE_LIMIT_ACCOUNT_PER_DAY:-10}
+      RATE_LIMIT_LOGIN_PER_15MIN: ${RATE_LIMIT_LOGIN_PER_15MIN:-20}
+
+      AGENT_POLL_TIMEOUT_MS: ${AGENT_POLL_TIMEOUT_MS:-25000}
+      COMMAND_TIMEOUT_MS: ${COMMAND_TIMEOUT_MS:-45000}
+      CONSOLE_BUFFER_SIZE: ${CONSOLE_BUFFER_SIZE:-1000}
+
+      BOOTSTRAP_SECRET: ${BOOTSTRAP_SECRET:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - rcm-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  rcm-data:

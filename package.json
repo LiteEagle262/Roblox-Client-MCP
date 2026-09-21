@@ -1,0 +1,27 @@
+{
+  "name": "roblox-client-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Hosted MCP relay that lets an AI inspect and act inside a live Roblox client.",
+  "homepage": "https://github.com/LiteEagle262/Roblox-Client-MCP",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LiteEagle262/Roblox-Client-MCP.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "install:all": "npm --prefix server ci && npm --prefix web ci",
+    "dev:server": "npm --prefix server run dev",
+    "dev:web": "npm --prefix web run dev",
+    "build": "npm --prefix web run build && npm --prefix server run build",
+    "build:local": "npm run build && node scripts/copy-web.mjs",
+    "start": "node server/dist/index.js",
+    "typecheck": "npm --prefix server run typecheck && npm --prefix web run typecheck",
+    "test": "npm run test:smoke && npm run test:lua",
+    "test:smoke": "node scripts/smoke.mjs",
+    "test:lua": "node scripts/lua-agent-test.mjs"
+  }
+}

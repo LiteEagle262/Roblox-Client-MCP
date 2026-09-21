@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            web/package-lock.json
+
+      - name: Install Lua
+        run: sudo apt-get update && sudo apt-get install -y lua5.4
+        # The agent test drives the real generated Lua against the relay.
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Smoke test (server + relay + MCP)
+        run: npm run test:smoke
+
+      - name: Agent test (generated Lua against a live relay)
+        run: LUA_BIN=lua5.4 npm run test:lua
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t roblox-client-mcp:ci .
+
+      - name: Boot it and check health
+        run: |
+          docker run -d --name rcm -p 3000:3000 \
+            -e PUBLIC_URL=http://127.0.0.1:3000 \
+            -e DATABASE_PATH=/data/bridge.db \
+            roblox-client-mcp:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/healthz; then ok=1; break; fi
+            sleep 2
+          done
+          test "${ok:-}" = "1"
+          curl -fsS -X POST http://127.0.0.1:3000/api/accounts \
+            -H 'Content-Type: application/json' -d '{}' | head -c 200
+          echo
+          docker logs rcm
+          docker rm -f rcm
