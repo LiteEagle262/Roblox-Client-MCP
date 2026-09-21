@@ -2,6 +2,7 @@ import { cn } from "@/lib/utils";
 import { Check, Copy } from "lucide-react";
 import * as React from "react";
 import { Button } from "./button";
+import { Highlighted, type Language } from "./highlight";
 
 export function CopyButton({
   value,
@@ -50,12 +51,14 @@ export function CopyButton({
 }
 
 export function CodeBlock({
-  children,
+  code,
+  language = "text",
   className,
   copyValue,
   wrap = false,
 }: {
-  children: React.ReactNode;
+  code: string;
+  language?: Language;
   className?: string;
   copyValue?: string;
   wrap?: boolean;
@@ -68,7 +71,9 @@ export function CodeBlock({
           wrap ? "overflow-x-hidden pr-11 whitespace-pre-wrap break-all" : "overflow-x-auto pr-12",
         )}
       >
-        <code>{children}</code>
+        <code>
+          <Highlighted code={code} language={language} />
+        </code>
       </pre>
       {copyValue && <CopyButton value={copyValue} className="absolute top-1.5 right-1.5" />}
     </div>

@@ -1,8 +1,9 @@
 --[[
     Roblox Client MCP :: Lua agent harness
     ---------------------------------------------------------------------------
-    Runs the *generated* agent script with a hand-rolled Roblox environment so
-    the agent can be tested without an executor. HTTP is performed with curl.
+    Runs the *generated* agent script against a hand-rolled Roblox environment so
+    the agent can be exercised without an executor. HTTP is done with curl, so
+    the agent talks to a real relay.
 
     usage: lua scripts/lua-harness.lua <baseUrl> <connectKey> <agentFile>
 ]]
@@ -11,31 +12,69 @@ local baseUrl = assert(arg[1], "base url required")
 local connectKey = assert(arg[2], "connect key required")
 local agentFile = assert(arg[3], "agent file required")
 
-------------------------------------------------------------------- robox stubs
-
-local connections = {}
+-------------------------------------------------------------------- primitives
 
 local function makeSignal(name)
 	local handlers = {}
-	return {
+	local signal = {
 		name = name,
 		Connect = function(_self, fn)
 			table.insert(handlers, fn)
 			return { Disconnect = function() end }
+		end,
+		Once = function(_self, fn)
+			table.insert(handlers, fn)
 		end,
 		Fire = function(_self, ...)
 			for _, fn in ipairs(handlers) do
 				fn(...)
 			end
 		end,
+		GetConnections = function()
+			return #handlers
+		end,
+	}
+	return signal
+end
+
+local Vector3Meta = {}
+Vector3Meta.__index = Vector3Meta
+Vector3Meta.__add = function(a, b)
+	return setmetatable({ X = a.X + b.X, Y = a.Y + b.Y, Z = a.Z + b.Z, __rbxtype = "Vector3" }, Vector3Meta)
+end
+Vector3Meta.__sub = function(a, b)
+	return setmetatable({ X = a.X - b.X, Y = a.Y - b.Y, Z = a.Z - b.Z, __rbxtype = "Vector3" }, Vector3Meta)
+end
+Vector3Meta.__tostring = function(v)
+	return string.format("Vector3(%g, %g, %g)", v.X, v.Y, v.Z)
+end
+
+local function vector3(x, y, z)
+	return setmetatable({ X = x or 0, Y = y or 0, Z = z or 0, __rbxtype = "Vector3" }, Vector3Meta)
+end
+
+local function makeCFrame(x, y, z)
+	-- Accepts (x, y, z) or a single Vector3, the two shapes the agent uses.
+	local px, py, pz = x, y, z
+	if type(x) == "table" and x.X ~= nil then
+		px, py, pz = x.X, x.Y, x.Z
+	end
+	px, py, pz = px or 0, py or 0, pz or 0
+	return {
+		X = px,
+		Y = py,
+		Z = pz,
+		Position = vector3(px, py, pz),
+		__rbxtype = "CFrame",
 	}
 end
 
 local InstanceMeta = {}
 InstanceMeta.__index = function(self, key)
 	local props = rawget(self, "__props")
-	if props and props[key] ~= nil then
-		return props[key]
+	local value = props and props[key]
+	if value ~= nil then
+		return value
 	end
 	local children = rawget(self, "__children")
 	if children then
@@ -45,16 +84,13 @@ InstanceMeta.__index = function(self, key)
 			end
 		end
 	end
-	local method = InstanceMeta[key]
-	return method
+	return InstanceMeta[key]
 end
 
 local function makeInstance(className, name, props)
 	local instance = setmetatable({
-		__rbxtype = "Instance",
 		__children = {},
 		__props = props or {},
-		__class = className,
 	}, InstanceMeta)
 	instance.__props.Name = name
 	instance.__props.ClassName = className
@@ -62,7 +98,11 @@ local function makeInstance(className, name, props)
 end
 
 function InstanceMeta:GetChildren()
-	return table.clone and table.clone(rawget(self, "__children")) or rawget(self, "__children")
+	local out = {}
+	for index, child in ipairs(rawget(self, "__children")) do
+		out[index] = child
+	end
+	return out
 end
 
 function InstanceMeta:GetDescendants()
@@ -95,6 +135,18 @@ function InstanceMeta:FindFirstChildOfClass(className)
 	return nil
 end
 
+function InstanceMeta:FindFirstChildWhichIsA(className)
+	return self:FindFirstChildOfClass(className)
+end
+
+function InstanceMeta:IsA(className)
+	return rawget(self, "__props").ClassName == className
+end
+
+function InstanceMeta:WaitForChild(name)
+	return self:FindFirstChild(name)
+end
+
 function InstanceMeta:GetFullName()
 	local parts = {}
 	local current = self
@@ -113,47 +165,113 @@ function InstanceMeta:GetAttributes()
 	return out
 end
 
+function InstanceMeta:PivotTo(target)
+	local root = rawget(self, "PrimaryPart")
+	if not root then
+		return
+	end
+	local rootProps = rawget(root, "__props")
+	rootProps.CFrame = target
+	rootProps.Position = target.Position or target
+end
+
+function InstanceMeta:Destroy()
+	local parent = self.Parent
+	if parent then
+		local siblings = rawget(parent, "__children")
+		for index, child in ipairs(siblings) do
+			if child == self then
+				table.remove(siblings, index)
+				break
+			end
+		end
+	end
+end
+
 local function addChild(parent, child)
 	child.Parent = parent
 	table.insert(rawget(parent, "__children"), child)
 	return child
 end
 
--------------------------------------------------------------------- game model
+--------------------------------------------------------------------- game model
 
 local game = makeInstance("DataModel", "Game", {})
 
 local Workspace = addChild(game, makeInstance("Workspace", "Workspace", {}))
-addChild(Workspace, makeInstance("Part", "Baseplate", {
-	Position = { X = 0, Y = 0, Z = 0 },
+local baseplate = addChild(Workspace, makeInstance("Part", "Baseplate", {
+	Position = vector3(0, 0, 0),
+	CFrame = makeCFrame(0, 0, 0),
 	Anchored = true,
+	Size = vector3(512, 20, 512),
 }))
+baseplate.Touched = makeSignal("Touched")
+
+local WorkspaceCamera = makeInstance("Camera", "Camera", { CFrame = makeCFrame(0, 10, 20) })
+Workspace.CurrentCamera = WorkspaceCamera
 
 local LocalPlayer = makeInstance("Player", "Tester", {
 	DisplayName = "Tester",
 	UserId = 99,
 	AccountAge = 1234,
+	Team = { Name = "Red" },
 })
 
-local Players = addChild(game, makeInstance("Players", "Players", {
-	MaxPlayers = 12,
-	LocalPlayer = LocalPlayer,
-}))
+local Players = addChild(game, makeInstance("Players", "Players", { MaxPlayers = 12 }))
 addChild(Players, LocalPlayer)
+Players.LocalPlayer = LocalPlayer
+
+local leaderstats = addChild(LocalPlayer, makeInstance("Folder", "leaderstats", {}))
+addChild(leaderstats, makeInstance("IntValue", "Cash", { Value = 2500 }))
+addChild(leaderstats, makeInstance("IntValue", "Level", { Value = 7 }))
 
 local character = addChild(Workspace, makeInstance("Model", "Tester", {}))
-addChild(character, makeInstance("Humanoid", "Humanoid", { Health = 100, MaxHealth = 100 }))
-addChild(character, makeInstance("Part", "HumanoidRootPart", {
-	Position = { X = 1, Y = 5, Z = 2 },
+local rootPart = addChild(character, makeInstance("Part", "HumanoidRootPart", {
+	Position = vector3(1, 5, 2),
+	CFrame = makeCFrame(1, 5, 2),
+	AssemblyLinearVelocity = vector3(0, 0, 0),
 }))
+addChild(character, makeInstance("Humanoid", "Humanoid", {
+	Health = 100,
+	MaxHealth = 100,
+	WalkSpeed = 16,
+	JumpPower = 50,
+	Sit = false,
+	GetState = function()
+		return { Name = "Running", __rbxtype = "EnumItem", EnumType = { Name = "HumanoidStateType" } }
+	end,
+}))
+character.PrimaryPart = rootPart
 LocalPlayer.Character = character
+
+local backpack = addChild(LocalPlayer, makeInstance("Backpack", "Backpack", {}))
+addChild(backpack, makeInstance("Tool", "Sword", {}))
+addChild(character, makeInstance("Tool", "Shield", {}))
+
+local ReplicatedStorage = addChild(game, makeInstance("ReplicatedStorage", "ReplicatedStorage", {}))
+local buyRemote = addChild(ReplicatedStorage, makeInstance("RemoteEvent", "BuyItem", {}))
+addChild(ReplicatedStorage, makeInstance("RemoteFunction", "GetData", {}))
+addChild(ReplicatedStorage, makeInstance("BindableEvent", "LocalBus", {}))
+
+local shopScript = addChild(ReplicatedStorage, makeInstance("LocalScript", "ShopHandler", {}))
+addChild(ReplicatedStorage, makeInstance("ModuleScript", "Config", {}))
 
 local LogService = addChild(game, makeInstance("LogService", "LogService", {}))
 LogService.MessageOut = makeSignal("MessageOut")
 
 local MarketplaceService = addChild(game, makeInstance("MarketplaceService", "MarketplaceService", {}))
-MarketplaceService.GetProductInfo = function(_self, placeId)
-	return { Name = "Harness Place (" .. tostring(placeId) .. ")" }
+MarketplaceService.GetProductInfo = function(_self, assetId)
+	return {
+		Name = "Harness Asset (" .. tostring(assetId) .. ")",
+		Description = "a test asset",
+		AssetTypeId = 9,
+		Creator = { Name = "HarnessDev", CreatorTargetId = 42, CreatorType = { Name = "User" } },
+		PriceInRobux = 100,
+		IsForSale = true,
+		IsLimited = false,
+		Created = "2020-01-01",
+		Updated = "2021-01-01",
+	}
 end
 
 local StarterGui = addChild(game, makeInstance("StarterGui", "StarterGui", {}))
@@ -175,6 +293,7 @@ local services = {
 	MarketplaceService = MarketplaceService,
 	StarterGui = StarterGui,
 	RunService = RunService,
+	ReplicatedStorage = ReplicatedStorage,
 }
 
 game.GetService = function(_self, name)
@@ -199,12 +318,25 @@ Players.GetPlayers = function()
 end
 Players.PlayerRemoving = makeSignal("PlayerRemoving")
 
------------------------------------------------------------------ lua globals
+-- A closure with real upvalues, so scripts.upvalues has something to read.
+local scriptClosure = (function()
+	local config = { difficulty = "hard", reward = 500 }
+	local callCount = 0
+	return function()
+		callCount = callCount + 1
+		return config, callCount
+	end
+end)()
+
+-- Executor file system, backed by a table.
+local fakeFiles = { ["existing.txt"] = "hello from the executor file system" }
+
+------------------------------------------------------------------ lua globals
 
 local register = {}
 
--- The sandbox the agent runs in. Globals written by the agent land here, and
--- anything we do not stub falls through to the real Lua globals.
+-- Sandbox for the agent. Globals it writes land here; anything unstubbed falls
+-- through to real Lua globals.
 local environment = setmetatable({}, {
 	__index = function(_self, key)
 		local value = register[key]
@@ -227,15 +359,19 @@ register.unpack = table.unpack or unpack
 register.game = game
 
 register.typeof = function(value)
-	local kind = type(value)
-	if kind ~= "table" then
-		return kind
+	if type(value) ~= "table" then
+		return type(value)
 	end
-	local meta = getmetatable(value)
-	if meta and meta.__index == InstanceMeta then
+	-- Compare the metatable itself: InstanceMeta.__index is a function, so
+	-- comparing that to the InstanceMeta table would never match.
+	if getmetatable(value) == InstanceMeta then
 		return "Instance"
 	end
-	return kind
+	local marker = rawget(value, "__rbxtype")
+	if marker then
+		return marker
+	end
+	return "table"
 end
 
 register.getrawmetatable = getmetatable
@@ -253,35 +389,103 @@ register.isconnectionenabled = function()
 	return true
 end
 register.getconnections = function()
-	return {}
+	return {
+		{ enabled = true, Connection = "function: 0x1", Function = "function: 0x1", Script = shopScript },
+	}
 end
 register.getsignalarguments = function()
-	return {}
+	return { "hit" }
 end
-register.getscripthash = function()
-	return "hash"
+register.firesignal = function(signal, ...)
+	if type(signal) == "table" and type(signal.Fire) == "function" then
+		signal:Fire(...)
+		return
+	end
+	error("not a signal")
 end
-register.decompile = function()
-	return "print('decompiled')"
+register.getscripthash = function(script)
+	return "hash-" .. tostring(script.Name)
+end
+register.decompile = function(script)
+	local name = script and script.Name or "?"
+	return table.concat({
+		"-- decompiled " .. name,
+		'local ReplicatedStorage = game:GetService("ReplicatedStorage")',
+		'local BuyItem = ReplicatedStorage:WaitForChild("BuyItem")',
+		'BuyItem:FireServer("sword", 100)',
+		'print("MAGIC_SEARCH_TOKEN in ' .. name .. '")',
+	}, "\n")
 end
 register.getscriptbytecode = function()
-	return "\0\1\2"
+	return "\0\1\2\3"
 end
-register.getrunningscripts = function()
-	return {}
-end
-register.getloadedmodules = function()
-	return {}
-end
-register.getmodules = function()
-	return {}
+register.getscriptclosure = function(script)
+	if script == shopScript then
+		return scriptClosure
+	end
+	return nil
 end
 register.getscripts = function()
-	return {}
+	return { shopScript }
+end
+register.getmodules = function()
+	return { ReplicatedStorage.Config }
+end
+register.getloadedmodules = function()
+	return { shopScript }
+end
+register.getrunningscripts = function()
+	return { shopScript }
 end
 register.IdentifyExecutor = function()
 	return "Harness Executor", "1.0-harness"
 end
+
+-- GC objects for gc.objects
+local gcTable = { marker = "gc-table-marker" }
+local gcFunction = function() end
+register.getgc = function()
+	return { gcTable, gcFunction, shopScript }
+end
+register.filtergc = function(objectType, options)
+	local out = {}
+	for _, item in ipairs({ gcTable, gcFunction }) do
+		if register.typeof(item) == objectType then
+			table.insert(out, item)
+		end
+	end
+	return out
+end
+
+-- File system
+register.readfile = function(path)
+	if fakeFiles[path] == nil then
+		error("could not find file: " .. tostring(path))
+	end
+	return fakeFiles[path]
+end
+register.writefile = function(path, content)
+	fakeFiles[path] = content
+end
+register.listfiles = function()
+	local out = {}
+	for path in pairs(fakeFiles) do
+		table.insert(out, path)
+	end
+	table.sort(out)
+	return out
+end
+register.isfile = function(path)
+	return fakeFiles[path] ~= nil
+end
+register.isfolder = function()
+	return false
+end
+register.makefolder = function() end
+register.delfile = function(path)
+	fakeFiles[path] = nil
+end
+register.delfolder = function() end
 
 register.warn = function(...)
 	local parts = {}
@@ -291,7 +495,7 @@ register.warn = function(...)
 	io.stderr:write("[warn] " .. table.concat(parts, " ") .. "\n")
 end
 
--- Route prints through LogService the way a real executor does.
+-- Prints go through LogService, the way a real executor surfaces them.
 local rawPrint = print
 register.print = function(...)
 	local parts = {}
@@ -303,9 +507,28 @@ register.print = function(...)
 	LogService.MessageOut:Fire(message, register.Enum.MessageType.MessageOutput)
 end
 
+-- Roblox's os.clock() keeps advancing across a yield. Real Lua's measures CPU
+-- time, which would freeze during a sleep-based task.wait and make any deadline
+-- loop spin forever. A virtual clock keeps the harness faithful.
+local clockBase = os.clock()
+local virtualElapsed = 0
+
+register.os = setmetatable({}, {
+	__index = function(_self, key)
+		if key == "clock" then
+			return function()
+				return clockBase + virtualElapsed
+			end
+		end
+		return os[key]
+	end,
+})
+
 register.task = {
 	wait = function(seconds)
-		os.execute(string.format("sleep %.2f", math.min(tonumber(seconds) or 0, 0.5)))
+		local duration = math.min(tonumber(seconds) or 0, 0.5)
+		virtualElapsed = virtualElapsed + duration
+		os.execute(string.format("sleep %.2f", duration))
 	end,
 	defer = function(fn)
 		fn()
@@ -321,29 +544,33 @@ register.Enum = {
 	},
 }
 
--- Vector / color stubs. Only enough to prove serialization round-trips.
-local function vector3(x, y, z)
-	return setmetatable({ X = x, Y = y, Z = z, __rbxtype = "Vector3" }, { __index = {} })
-end
 register.Vector3 = { new = vector3 }
-register.Vector2 = { new = function(x, y)
-	return { X = x, Y = y, __rbxtype = "Vector2" }
-end }
-register.CFrame = { new = function(x, y, z)
-	return { X = x, Y = y, Z = z, __rbxtype = "CFrame" }
-end }
-register.Color3 = { new = function(r, g, b)
-	return { R = r, G = g, B = b, __rbxtype = "Color3" }
-end }
-register.BrickColor = { new = function(name)
-	return { Name = tostring(name), Number = 1, __rbxtype = "BrickColor" }
-end }
-register.UDim2 = { new = function(xs, xo, ys, yo)
-	return { X = { Scale = xs, Offset = xo }, Y = { Scale = ys, Offset = yo }, __rbxtype = "UDim2" }
-end }
-register.UDim = { new = function(scale, offset)
-	return { Scale = scale, Offset = offset, __rbxtype = "UDim" }
-end }
+register.Vector2 = {
+	new = function(x, y)
+		return { X = x, Y = y, __rbxtype = "Vector2" }
+	end,
+}
+register.CFrame = { new = makeCFrame }
+register.Color3 = {
+	new = function(r, g, b)
+		return { R = r, G = g, B = b, __rbxtype = "Color3" }
+	end,
+}
+register.BrickColor = {
+	new = function(name)
+		return { Name = tostring(name), Number = 1, __rbxtype = "BrickColor" }
+	end,
+}
+register.UDim2 = {
+	new = function(xs, xo, ys, yo)
+		return { X = { Scale = xs, Offset = xo }, Y = { Scale = ys, Offset = yo }, __rbxtype = "UDim2" }
+	end,
+}
+register.UDim = {
+	new = function(scale, offset)
+		return { Scale = scale, Offset = offset, __rbxtype = "UDim" }
+	end,
+}
 
 if not table.pack then
 	table.pack = function(...)
@@ -401,7 +628,6 @@ end
 
 local deliveredExit = false
 register.request = function(options)
-	local url = options.Url
 	local body = options.Body or ""
 
 	if deliveredExit then
@@ -412,7 +638,7 @@ register.request = function(options)
 		deliveredExit = true
 	end
 
-	return curlPost(url, body)
+	return curlPost(options.Url, body)
 end
 
 register.http_request = register.request

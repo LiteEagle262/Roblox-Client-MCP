@@ -45,9 +45,7 @@ export function ConnectCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <CodeBlock copyValue={loader.loadstring} wrap>
-          {loader.loadstring}
-        </CodeBlock>
+        <CodeBlock code={loader.loadstring} language="lua" copyValue={loader.loadstring} wrap />
 
         <div className="flex flex-col gap-2">
           <span className="text-muted-foreground text-xs">Connect key</span>

@@ -83,27 +83,79 @@ Status and console updates arrive over a WebSocket (`/ws/dashboard`), scoped to 
 
 ## Tools exposed over MCP
 
-| Tool | Group | What it does |
-| --- | --- | --- |
-| `roblox_status` | Session | Is an executor attached, and what game is it in |
-| `roblox_run_script` | Code | Run arbitrary Luau; returns values and console output |
-| `roblox_eval` | Code | Evaluate one expression |
-| `roblox_read_console` | Console | Read buffered prints, warnings and errors |
-| `roblox_clear_console` | Console | Discard the console buffer |
-| `roblox_get_game_info` | Game | Place name, place id, job id, creator, player counts |
-| `roblox_list_players` | Game | Players with health and world position |
-| `roblox_notify` | Game | Show a toast on the user's screen |
-| `roblox_dump_workspace` | Explorer | Nested view of the instance tree |
-| `roblox_get_instance` | Explorer | Class, children, attributes, properties |
-| `roblox_find_instances` | Explorer | Scan for instances by name and/or class |
-| `roblox_set_property` | Explorer | Write a property, with Roblox value coercion |
-| `roblox_call_method` | Explorer | Invoke a method on an instance |
-| `roblox_list_scripts` | Scripts | DataModel, loaded, running or module scripts |
-| `roblox_decompile_script` | Scripts | Recover readable Luau from a script instance |
-| `roblox_remote_spy` | Remotes | Hook namecall to log remote traffic |
-| `roblox_fire_remote` | Remotes | Invoke a remote from the client |
-| `roblox_inspect_signal` | Remotes | List connections on an event, with the owning script |
-| `roblox_http_request` | Network | HTTP through the executor's HTTP layer |
+31 tools. Reads are safe; anything that writes, fires, or moves is marked destructive and hits a
+real game.
+
+**Session and code**
+
+| Tool | What it does |
+| --- | --- |
+| `roblox_status` | Is an executor attached, and what game is it in |
+| `roblox_run_script` | Run arbitrary Luau; returns values and console output |
+| `roblox_eval` | Evaluate one expression |
+
+**Console**
+
+| Tool | What it does |
+| --- | --- |
+| `roblox_read_console` | Read buffered prints, warnings and errors |
+| `roblox_clear_console` | Discard the console buffer |
+
+**Game and player**
+
+| Tool | What it does |
+| --- | --- |
+| `roblox_get_game_info` | Place name, place id, job id, creator, player counts |
+| `roblox_list_players` | Players with health and world position |
+| `roblox_get_local_player` | Your own position, health, walk speed, camera, team, leaderstats |
+| `roblox_get_player` | One player's character, health, team, leaderstats and tools |
+| `roblox_teleport_to` | Move your character to a player, an instance, or coordinates |
+| `roblox_get_asset_info` | Marketplace name, creator and price for an asset id |
+| `roblox_notify` | Show a toast on the user's screen |
+
+**Explorer**
+
+| Tool | What it does |
+| --- | --- |
+| `roblox_dump_workspace` | Nested view of the instance tree |
+| `roblox_get_instance` | Class, children, attributes, properties |
+| `roblox_find_instances` | Scan for instances by name and/or class |
+| `roblox_wait_for_instance` | Block until a path resolves, instead of guessing with sleeps |
+| `roblox_set_property` | Write a property, with Roblox value coercion |
+| `roblox_call_method` | Invoke a method on an instance |
+
+**Scripts**
+
+| Tool | What it does |
+| --- | --- |
+| `roblox_list_scripts` | DataModel, loaded, running or module scripts |
+| `roblox_decompile_script` | Recover readable Luau from a script instance |
+| `roblox_search_scripts` | Grep every decompiled script for a string; returns script, line and context |
+| `roblox_get_upvalues` | Dump a script closure's captured variables |
+| `roblox_get_gc_objects` | Find live tables or functions by name, hash or constant |
+
+**Remotes**
+
+| Tool | What it does |
+| --- | --- |
+| `roblox_list_remotes` | Every RemoteEvent, RemoteFunction and Bindable, with paths |
+| `roblox_remote_spy` | Hook namecall to log all remote traffic |
+| `roblox_hook_remote` | Log or block traffic on one specific remote |
+| `roblox_inspect_signal` | List connections on an event, with the owning script |
+| `roblox_fire_signal` | Fire an event on an instance |
+| `roblox_fire_remote` | Invoke a remote from the client |
+
+**Network**
+
+| Tool | What it does |
+| --- | --- |
+| `roblox_http_request` | HTTP through the executor's HTTP layer |
+| `roblox_file` | Read, write, list or delete files in the executor's workspace |
+
+`roblox_search_scripts` is usually the fastest way into an unfamiliar game: find a remote with
+`roblox_list_remotes`, then grep for its name to find the script that uses it, then
+`roblox_decompile_script` the result. Decompiles are cached per session, so the first search is
+slow and later ones are fast.
 
 Roblox value types are exchanged as tagged objects, so the AI can read and write them:
 
@@ -165,11 +217,16 @@ Everything else is probed with `pcall` and degrades gracefully:
 
 | Used when available | Enables |
 | --- | --- |
-| `decompile`, `getscriptbytecode` | `roblox_decompile_script` |
-| `getscripts`, `getloadedmodules`, `getrunningscripts` | `roblox_list_scripts` |
-| `getrawmetatable`, `newcclosure`, `checkcaller` | `roblox_remote_spy` |
+| `decompile`, `getscriptbytecode` | `roblox_decompile_script`, `roblox_search_scripts` |
+| `getscripts`, `getloadedmodules`, `getrunningscripts` | `roblox_list_scripts`, `roblox_search_scripts` |
+| `getscripthash` | Decompile caching, so repeat searches are fast |
+| `getrawmetatable`, `newcclosure`, `checkcaller` | `roblox_remote_spy`, `roblox_hook_remote` |
 | `getconnections`, `isconnectionenabled`, `getsignalarguments` | `roblox_inspect_signal` |
-| `getscripthash`, `IdentifyExecutor` | Extra detail in results |
+| `firesignal` | `roblox_fire_signal` |
+| `getscriptclosure`, `debug.getupvalue` | `roblox_get_upvalues` |
+| `getgc`, `filtergc` | `roblox_get_gc_objects` |
+| `readfile`, `writefile`, `listfiles`, `makefolder` | `roblox_file` |
+| `IdentifyExecutor` | Extra detail in results |
 
 If a function is missing, the tool returns a clear error instead of failing the whole
 session. The agent also stops cleanly when the server revokes its key, so a rotated key does

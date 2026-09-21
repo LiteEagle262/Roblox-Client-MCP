@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { CodeBlock } from "@/components/ui/copy";
 import { Separator } from "@/components/ui/separator";
 import type { MetaResponse } from "@/lib/api";
 import type { Route } from "@/lib/router";
@@ -36,8 +37,8 @@ const steps = [
 
 const features = [
   {
-    title: "19 MCP tools",
-    body: "Run Luau, read the console, walk the instance tree, list and decompile scripts, inspect signals, spy on remotes.",
+    title: "31 MCP tools",
+    body: "Run Luau, read the console, walk the instance tree, grep decompiled scripts, hook remotes, read a closure's upvalues.",
     icon: Wrench,
   },
   {
@@ -197,14 +198,14 @@ export function Landing({
             Everything here is one Node container and one SQLite file. Clone it, point it at your
             domain, and deploy it on Dokploy, Coolify, Fly, or a VPS.
           </p>
-          <div className="bg-muted/50 w-full max-w-2xl overflow-x-auto rounded-lg border p-4">
-            <pre className="font-mono text-xs leading-relaxed">
-              <code>{`git clone https://github.com/LiteEagle262/Roblox-Client-MCP
+          <CodeBlock
+            className="w-full max-w-2xl"
+            language="bash"
+            code={`git clone https://github.com/LiteEagle262/Roblox-Client-MCP
 cd Roblox-Client-MCP
 cp .env.example .env   # set PUBLIC_URL
-docker compose up -d`}</code>
-            </pre>
-          </div>
+docker compose up -d`}
+          />
         </section>
       </main>
 

@@ -535,5 +535,339 @@ export function createMcpServer(account: Account): McpServer {
     },
   );
 
+  /* ------------------------------------------------------- player & movement */
+
+  server.registerTool(
+    "roblox_get_local_player",
+    {
+      title: "Inspect the local player",
+      description:
+        "Everything about the user's own character: position, velocity, health, humanoid state, " +
+        "walk speed, camera position, team, and leaderstats (most games put currency and level there). " +
+        "Usually the first thing to read before touching anything.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      const result = await call("player.local", {});
+      return result.ok ? json(result.value) : failure(result.message);
+    },
+  );
+
+  server.registerTool(
+    "roblox_get_player",
+    {
+      title: "Inspect any player",
+      description:
+        "Details for one player by name, partial name, or user id: character, health, position, team, " +
+        "leaderstats, and their tools (both equipped and in the backpack).",
+      inputSchema: {
+        name_or_id: z.string().describe("Player name, part of a name, or a user id."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ name_or_id }) => {
+      const result = await call("player.get", { nameOrId: name_or_id });
+      return result.ok ? json(result.value) : failure(result.message);
+    },
+  );
+
+  server.registerTool(
+    "roblox_teleport_to",
+    {
+      title: "Teleport the local character",
+      description:
+        "Move the user's own character. Give exactly one of: `player` (teleport to them), `path` " +
+        "(teleport to an instance), or `x`/`y`/`z`. Add `offset` to land beside the target rather " +
+        "than inside it. Unsits the character first if needed.",
+      inputSchema: {
+        player: z.string().optional().describe("Name or user id of the player to teleport to."),
+        path: z.string().optional().describe("Instance path to teleport to."),
+        x: z.number().optional().describe("Target X."),
+        y: z.number().optional().describe("Target Y."),
+        z: z.number().optional().describe("Target Z."),
+        offset: z
+          .object({ x: z.number(), y: z.number(), z: z.number() })
+          .optional()
+          .describe("Offset added to the target position."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    },
+    async ({ player, path, x, y, z: zPos, offset }) => {
+      const result = await call("player.teleport", { player, path, x, y, z: zPos, offset });
+      return result.ok ? json(result.value) : failure(result.message);
+    },
+  );
+
+  /* --------------------------------------------------------- remote plumbing */
+
+  server.registerTool(
+    "roblox_list_remotes",
+    {
+      title: "List every remote",
+      description:
+        "Find all RemoteEvents, UnreliableRemoteEvents, RemoteFunctions and Bindables in the game, with " +
+        "their paths. Use this to discover a game's remote surface, then `roblox_remote_spy` or " +
+        "`roblox_hook_remote` to see what goes through them.",
+      inputSchema: {
+        kind: z
+          .enum(["all", "RemoteEvent", "UnreliableRemoteEvent", "RemoteFunction", "BindableEvent", "BindableFunction"])
+          .optional()
+          .describe("Filter to one class. Default `all`."),
+        filter: z.string().optional().describe("Case-insensitive substring match on the remote's name."),
+        limit: z.number().int().min(1).max(2000).optional().describe("Max results. Default 200."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ kind, filter, limit }) => {
+      const result = await call("remotes.list", { kind, filter, limit });
+      return result.ok ? json(result.value) : failure(result.message);
+    },
+  );
+
+  server.registerTool(
+    "roblox_hook_remote",
+    {
+      title: "Hook one remote",
+      description:
+        "Intercept a specific remote: `log` records every call it receives, `block` records it and stops " +
+        "it reaching the server. This is how you test what a remote does without the game reacting. " +
+        "Use `dump` to read captured calls, `remove` to unhook one, `clear` to unhook all.",
+      inputSchema: {
+        action: z.enum(["add", "remove", "clear", "dump"]).describe("What to do."),
+        path: z
+          .string()
+          .optional()
+          .describe("Path to the remote. Required for `add` and `remove`; ignored by `dump` and `clear`."),
+        method: z
+          .string()
+          .optional()
+          .describe("Only intercept this method, e.g. `FireServer`. Omit to intercept all."),
+        mode: z
+          .enum(["log", "block"])
+          .optional()
+          .describe("`log` records and forwards; `block` records and swallows. Default `log`."),
+        log_limit: z.number().int().min(1).max(500).optional().describe("Calls kept per hook. Default 100."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    },
+    async ({ action, path, method, mode, log_limit }) => {
+      if ((action === "add" || action === "remove") && !path) {
+        return failure(`\`path\` is required when action is "${action}".`);
+      }
+      const result = await call("remotes.hook", {
+        action,
+        path,
+        method,
+        mode,
+        logLimit: log_limit,
+      });
+      return result.ok ? json(result.value) : failure(result.message);
+    },
+  );
+
+  server.registerTool(
+    "roblox_fire_signal",
+    {
+      title: "Fire a signal",
+      description:
+        "Fire an event on an instance as if the game had, e.g. `{path: 'game.Workspace.Part', " +
+        "signal: 'Touched'}`. Pair with `roblox_inspect_signal` to see what is listening. Destructive: " +
+        "this runs real game logic.",
+      inputSchema: {
+        path: z.string().describe(INSTANCE_PATH_DOC),
+        signal: z.string().describe("Event name, e.g. `Touched` or `Changed`."),
+        args: z.array(z.unknown()).optional().describe("Arguments to pass, in tagged form for Roblox types."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    async ({ path, signal, args }) => {
+      const result = await call("signal.fire", { path, signal, args: args ?? [] });
+      return result.ok ? json(result.value) : failure(result.message);
+    },
+  );
+
+  /* -------------------------------------------------------- script forensics */
+
+  server.registerTool(
+    "roblox_search_scripts",
+    {
+      title: "Grep inside decompiled scripts",
+      description:
+        "Search the source of every client script in the game for a string and get back the script, line " +
+        "number, and surrounding code. This is the fastest way to answer 'where is this remote used', " +
+        "'what fires this event', or 'which script reads this value'. Decompiles are cached per session, " +
+        "so the first call is slow and later ones are fast.",
+      inputSchema: {
+        query: z.string().describe("Text to find. Treat as a literal unless `regex` is set."),
+        regex: z.boolean().optional().describe("Treat `query` as a Luau pattern. Default false."),
+        kinds: z
+          .array(z.enum(["loaded", "modules", "running", "scripts"]))
+          .optional()
+          .describe("Which script sets to search. Default all of `loaded`, `modules`, `scripts`."),
+        limit: z.number().int().min(1).max(500).optional().describe("Max matches. Default 40."),
+        context_chars: z
+          .number()
+          .int()
+          .min(20)
+          .max(400)
+          .optional()
+          .describe("Characters of context either side of each hit. Default 120."),
+        max_scripts: z
+          .number()
+          .int()
+          .min(1)
+          .max(800)
+          .optional()
+          .describe("Stop after decompiling this many scripts. Default 150."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ query, regex, kinds, limit, context_chars, max_scripts }) => {
+      const result = await call(
+        "scripts.search",
+        { query, regex, kinds, limit, contextChars: context_chars, maxScripts: max_scripts },
+        { timeoutMs: 110_000 },
+      );
+      return result.ok ? json(result.value) : failure(result.message);
+    },
+  );
+
+  server.registerTool(
+    "roblox_get_upvalues",
+    {
+      title: "Read a script's upvalues",
+      description:
+        "Dump the captured variables of a script's closure. This exposes the tables, configs and helper " +
+        "functions a script closes over — often the fastest route to hidden game state. Use " +
+        "`roblox_list_scripts` to find a path first.",
+      inputSchema: {
+        path: z.string().describe("Path to the script, from `roblox_list_scripts`."),
+        limit: z.number().int().min(1).max(200).optional().describe("Max upvalues. Default 30."),
+        max_preview: z
+          .number()
+          .int()
+          .min(40)
+          .max(4000)
+          .optional()
+          .describe("Characters of JSON per value. Default 400."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ path, limit, max_preview }) => {
+      const result = await call("scripts.upvalues", { path, limit, maxPreview: max_preview });
+      return result.ok ? json(result.value) : failure(result.message);
+    },
+  );
+
+  server.registerTool(
+    "roblox_get_gc_objects",
+    {
+      title: "Search the garbage collector",
+      description:
+        "Enumerate live Lua objects in the client. With a `filter` this uses `filtergc` to find tables or " +
+        "functions by name, hash or constant — the standard way to locate a specific closure or an " +
+        "unreferenced config table. Without a filter it scans and returns matching types with previews.",
+      inputSchema: {
+        type: z.enum(["table", "function"]).describe("Kind of object to look for."),
+        filter: z
+          .record(z.unknown())
+          .optional()
+          .describe(
+            'Passed straight to `filtergc`, e.g. `{"Name": "myFunction"}`, `{"Hash": "..."}`, ' +
+              '`{"IgnoreExecutor": true}`, `{"Constant": "some string"}`.',
+          ),
+        limit: z.number().int().min(1).max(200).optional().describe("Max objects returned. Default 20."),
+        include_tables: z
+          .boolean()
+          .optional()
+          .describe("When scanning without a filter, include tables. Default false."),
+        max_preview: z.number().int().min(40).max(4000).optional().describe("Characters of JSON per object."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ type, filter, limit, include_tables, max_preview }) => {
+      const result = await call("gc.objects", {
+        type,
+        filter,
+        limit,
+        includeTables: include_tables,
+        maxPreview: max_preview,
+      });
+      return result.ok ? json(result.value) : failure(result.message);
+    },
+  );
+
+  /* ------------------------------------------------------------ misc & files */
+
+  server.registerTool(
+    "roblox_wait_for_instance",
+    {
+      title: "Wait for something to exist",
+      description:
+        "Block until an instance path resolves, then return it. Use this after an action that makes the " +
+        "game react, instead of guessing with sleeps. Returns `found: false` on timeout rather than failing.",
+      inputSchema: {
+        path: z.string().describe(INSTANCE_PATH_DOC),
+        timeout_ms: z
+          .number()
+          .int()
+          .min(200)
+          .max(120000)
+          .optional()
+          .describe("How long to wait. Default 10000."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ path, timeout_ms }) => {
+      const result = await call(
+        "instance.wait",
+        { path, timeoutMs: timeout_ms },
+        { timeoutMs: (timeout_ms ?? 10_000) + 10_000 },
+      );
+      return result.ok ? json(result.value) : failure(result.message);
+    },
+  );
+
+  server.registerTool(
+    "roblox_get_asset_info",
+    {
+      title: "Look up an asset",
+      description:
+        "Marketplace details for an asset id: name, description, creator, price, and whether it is for " +
+        "sale. Useful when you find an id in a script and want to know what it actually is.",
+      inputSchema: {
+        asset_id: z.number().int().describe("Roblox asset id."),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ asset_id }) => {
+      const result = await call("asset.info", { assetId: asset_id });
+      return result.ok ? json(result.value) : failure(result.message);
+    },
+  );
+
+  server.registerTool(
+    "roblox_file",
+    {
+      title: "Executor file system",
+      description:
+        "Read, write, list, create or delete files in the executor's workspace folder. Handy for keeping " +
+        "notes, configs, or dumps between sessions. Availability depends on the executor exposing " +
+        "`readfile`/`writefile`/`listfiles`.",
+      inputSchema: {
+        action: z.enum(["list", "read", "write", "mkdir", "exists", "delete"]).describe("Operation."),
+        path: z.string().optional().describe("File or folder path. Omit for `list` to use the workspace root."),
+        content: z.string().optional().describe("File contents. Required for `write`."),
+        max_bytes: z.number().int().min(100).max(2000000).optional().describe("Read cap. Default 100000."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    },
+    async ({ action, path, content, max_bytes }) => {
+      const result = await call("fs", { action, path, content, maxBytes: max_bytes });
+      return result.ok ? json(result.value) : failure(result.message);
+    },
+  );
+
   return server;
 }

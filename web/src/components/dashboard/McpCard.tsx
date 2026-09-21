@@ -79,18 +79,18 @@ export function McpCard({
             <TabsTrigger value="curl">Test it</TabsTrigger>
           </TabsList>
           <TabsContent value="config">
-            <CodeBlock copyValue={clientConfig(mcpUrl, token)}>{config}</CodeBlock>
+            <CodeBlock code={config} language="json" copyValue={clientConfig(mcpUrl, token)} />
           </TabsContent>
           <TabsContent value="curl">
             <CodeBlock
-              copyValue={`curl -s ${mcpUrl} -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`}
-            >
-              {`curl -s ${mcpUrl} \\
+              code={`curl -s ${mcpUrl} \\
   -H "Authorization: Bearer ${revealed ? token : "<your-mcp-token>"}" \\
   -H "Content-Type: application/json" \\
   -H "Accept: application/json, text/event-stream" \\
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`}
-            </CodeBlock>
+              language="bash"
+              copyValue={`curl -s ${mcpUrl} -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`}
+            />
           </TabsContent>
         </Tabs>
 

@@ -171,7 +171,7 @@ async function callTool(name, args) {
 const status = await callTool("roblox_status", {});
 check(
   "roblox_status reports the harness executor",
-  status.text.includes("Harness Executor") && status.text.includes("Harness Place"),
+  status.text.includes("Harness Executor") && status.text.includes('"placeId": 123456'),
   status.text.replace(/\s+/g, " ").slice(0, 200),
 );
 
@@ -211,6 +211,127 @@ check(
 
 const errScript = await callTool("roblox_run_script", { code: "error('boom from the harness')" });
 check("script errors are reported, not swallowed", errScript.isError && errScript.text.includes("boom from the harness"), errScript.text.slice(0, 140));
+
+// ------------------------------------------------ the newer tool surface
+
+const toolList = await fetch(`${base}/mcp`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+    Authorization: `Bearer ${mcpToken}`,
+  },
+  body: JSON.stringify({ jsonrpc: "2.0", id: 99, method: "tools/list" }),
+})
+  .then((r) => r.json())
+  .then((b) => (b.result?.tools ?? []).map((t) => t.name));
+check("tools/list exposes the full surface", toolList.length === 31, `${toolList.length} tools`);
+
+const local = await callTool("roblox_get_local_player", {});
+check(
+  "roblox_get_local_player reads character + leaderstats",
+  local.text.includes('"name": "Tester"') && local.text.includes('"Cash": 2500') && local.text.includes('"health": 100'),
+  local.text.replace(/\s+/g, " ").slice(0, 130),
+);
+check(
+  "roblox_get_local_player resolves the character path",
+  local.text.includes('"characterPath": "game.Workspace.Tester"'),
+  "characterPath present",
+);
+
+// Instance values must round-trip as tagged objects carrying a usable path.
+const instanceValue = await callTool("roblox_eval", { expression: "game.Workspace.Baseplate" });
+check(
+  "instance values serialize as tagged objects with a path",
+  instanceValue.text.includes('"__type": "Instance"') &&
+    instanceValue.text.includes('"path": "game.Workspace.Baseplate"'),
+  instanceValue.text.replace(/\s+/g, " ").slice(0, 160),
+);
+
+const onePlayer = await callTool("roblox_get_player", { name_or_id: "Tester" });
+check(
+  "roblox_get_player finds by name and lists tools",
+  onePlayer.text.includes('"Sword"') && onePlayer.text.includes('"Shield"'),
+  onePlayer.text.replace(/\s+/g, " ").slice(0, 130),
+);
+
+const remotes = await callTool("roblox_list_remotes", {});
+check(
+  "roblox_list_remotes finds every remote class",
+  remotes.text.includes("BuyItem") && remotes.text.includes("GetData") && remotes.text.includes("LocalBus"),
+  remotes.text.replace(/\s+/g, " ").slice(0, 150),
+);
+check(
+  "roblox_list_remotes returns usable paths",
+  remotes.text.includes('"path": "game.ReplicatedStorage.BuyItem"'),
+  remotes.text.replace(/\s+/g, " ").slice(0, 150),
+);
+
+const search = await callTool("roblox_search_scripts", { query: "MAGIC_SEARCH_TOKEN" });
+check(
+  "roblox_search_scripts greps decompiled sources",
+  search.text.includes("MAGIC_SEARCH_TOKEN") && search.text.includes('"line"'),
+  search.text.replace(/\s+/g, " ").slice(0, 140),
+);
+
+const upvalues = await callTool("roblox_get_upvalues", { path: "game.ReplicatedStorage.ShopHandler" });
+check(
+  "roblox_get_upvalues reads the closure's captured variables",
+  upvalues.text.includes('"config"') && upvalues.text.includes('"callCount"'),
+  upvalues.text.replace(/\s+/g, " ").slice(0, 150),
+);
+
+const gc = await callTool("roblox_get_gc_objects", { type: "table", filter: { IgnoreExecutor: true } });
+check("roblox_get_gc_objects enumerates tables", gc.text.includes('"total"'), gc.text.replace(/\s+/g, " ").slice(0, 110));
+
+const asset = await callTool("roblox_get_asset_info", { asset_id: 12345 });
+check(
+  "roblox_get_asset_info resolves an asset",
+  asset.text.includes("Harness Asset (12345)") && asset.text.includes('"priceInRobux": 100'),
+  asset.text.replace(/\s+/g, " ").slice(0, 130),
+);
+
+const waitFound = await callTool("roblox_wait_for_instance", { path: "game.Workspace.Baseplate", timeout_ms: 2000 });
+check("roblox_wait_for_instance resolves an existing path", waitFound.text.includes('"found": true'), waitFound.text.slice(0, 110));
+
+const waitMissing = await callTool("roblox_wait_for_instance", { path: "game.Workspace.DoesNotExist", timeout_ms: 400 });
+check("roblox_wait_for_instance reports a timeout honestly", waitMissing.text.includes('"found": false'), waitMissing.text.replace(/\s+/g, " ").slice(0, 110));
+
+const fsList = await callTool("roblox_file", { action: "list" });
+check("roblox_file lists the workspace", fsList.text.includes("existing.txt"), fsList.text.replace(/\s+/g, " ").slice(0, 110));
+
+const fsRead = await callTool("roblox_file", { action: "read", path: "existing.txt" });
+check("roblox_file reads a file", fsRead.text.includes("hello from the executor file system"), fsRead.text.slice(0, 110));
+
+await callTool("roblox_file", { action: "write", path: "notes/agent.txt", content: "written by the test" });
+const fsRound = await callTool("roblox_file", { action: "read", path: "notes/agent.txt" });
+check("roblox_file write -> read round-trips", fsRound.text.includes("written by the test"), fsRound.text.slice(0, 110));
+
+const teleport = await callTool("roblox_teleport_to", { x: 100, y: 200, z: 300 });
+check(
+  "roblox_teleport_to moves the character",
+  teleport.text.includes('"x": 100') && teleport.text.includes('"y": 200'),
+  teleport.text.replace(/\s+/g, " ").slice(0, 130),
+);
+
+const teleportOffset = await callTool("roblox_teleport_to", { player: "Tester", offset: { x: 0, y: 5, z: 0 } });
+check("roblox_teleport_to accepts an offset", teleportOffset.text.includes('"y": 205'), teleportOffset.text.replace(/\s+/g, " ").slice(0, 110));
+
+const fire = await callTool("roblox_fire_signal", { path: "game.Workspace.Baseplate", signal: "Touched" });
+check("roblox_fire_signal fires an event", fire.text.includes('"fired": "Touched"'), fire.text.replace(/\s+/g, " ").slice(0, 110));
+
+const hookAdd = await callTool("roblox_hook_remote", {
+  action: "add",
+  path: "game.ReplicatedStorage.BuyItem",
+  mode: "log",
+});
+check("roblox_hook_remote installs a hook", hookAdd.text.includes('"mode": "log"'), hookAdd.text.replace(/\s+/g, " ").slice(0, 110));
+
+const hookDump = await callTool("roblox_hook_remote", { action: "dump" });
+check("roblox_hook_remote dumps installed hooks", hookDump.text.includes("BuyItem") && hookDump.text.includes('"count": 1'), hookDump.text.replace(/\s+/g, " ").slice(0, 110));
+
+const hookClear = await callTool("roblox_hook_remote", { action: "clear" });
+check("roblox_hook_remote clears hooks", hookClear.text.includes('"cleared": true'), hookClear.text.slice(0, 110));
 
 // -------------------------------------------------------------- shut it down
 
