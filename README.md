@@ -191,10 +191,10 @@ Every variable has a working default except `PUBLIC_URL`.
 | `MAX_ACCOUNTS` | `0` | Hard cap. `0` = unlimited. |
 | `BOOTSTRAP_SECRET` | empty | If set, registration requires `?bootstrap=<value>`. |
 | `SESSION_TTL_DAYS` | `30` | Dashboard session lifetime. |
-| `RATE_LIMIT_ACCOUNT_PER_HOUR` | `3` | Per IP. |
-| `RATE_LIMIT_ACCOUNT_PER_DAY` | `10` | Per IP. |
-| `RATE_LIMIT_LOGIN_PER_15MIN` | `20` | Per IP. |
-| `RATE_LIMIT_RELAY_PER_MIN` | `1200` | Per IP, on the agent sync endpoint. |
+| `RATE_LIMIT_ACCOUNT_PER_HOUR` | `3` | Per IP. **`0` disables it.** |
+| `RATE_LIMIT_ACCOUNT_PER_DAY` | `10` | Per IP. **`0` disables it.** |
+| `RATE_LIMIT_LOGIN_PER_15MIN` | `20` | Per IP. `0` disables it. |
+| `RATE_LIMIT_RELAY_PER_MIN` | `1200` | Per IP, on the agent sync endpoint. `0` disables it. |
 | `AGENT_POLL_TIMEOUT_MS` | `25000` | How long an idle poll parks. Lower = snappier shutdown, more requests. |
 | `COMMAND_TIMEOUT_MS` | `45000` | How long the AI waits for the executor. |
 | `CONSOLE_BUFFER_SIZE` | `1000` | Console lines kept per session. |

@@ -133,8 +133,15 @@ export function Landing({
           </div>
           {meta && (
             <p className="text-muted-foreground font-mono text-xs">
-              {meta.accountCount} accounts · {meta.onlineSessions} executors online ·{" "}
-              {meta.rateLimits.accountPerHour}/hr per IP
+              {[
+                `${meta.accountCount} accounts`,
+                `${meta.onlineSessions} executors online`,
+                meta.rateLimits.accountPerHour > 0
+                  ? `${meta.rateLimits.accountPerHour}/hr per IP`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
             </p>
           )}
         </section>
